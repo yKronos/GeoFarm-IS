@@ -10,6 +10,8 @@ export default function CropEstimatorIndex({ farmers, crops }) {
     farmer_id: '',
     crop_id: '',
     area_hectares: '',
+    planting_date: '',
+    season: '',
   });
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -87,6 +89,32 @@ export default function CropEstimatorIndex({ farmers, crops }) {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Planting Date</label>
+                <input
+                  type="date"
+                  value={formData.planting_date}
+                  onChange={e => setFormData({...formData, planting_date: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+                <p className="text-xs text-gray-500 mt-1">Enter to estimate harvest date and assess risks</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Season </label>
+                <select
+                  value={formData.season}
+                  onChange={e => setFormData({...formData, season: e.target.value})}
+                  className="w-full px-3 py-2 border rounded-lg"
+                >
+                  <option value="">Select Season</option>
+                  <option value="dry">Dry Season</option>
+                  <option value="wet">Wet Season</option>
+                </select>
+              </div>
+            </div>
+
             {selectedCrop && (
               <div className="p-4 bg-blue-50 rounded-lg text-sm">
                 <p className="font-medium mb-1">Crop Configuration:</p>
@@ -108,7 +136,8 @@ export default function CropEstimatorIndex({ farmers, crops }) {
         </Card>
 
         {results && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>
               <div className="flex items-center gap-3">
                 <div className="p-3 bg-green-100 rounded-lg">
@@ -157,6 +186,81 @@ export default function CropEstimatorIndex({ farmers, crops }) {
               </div>
             </Card>
           </div>
+
+          {/* Harvest Date & Risk Assessment */}
+          {results.planting_date && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card title="Crop Timeline">
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
+                    <span className="text-sm font-medium">Planting Date:</span>
+                    <span className="font-bold">{new Date(results.planting_date).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
+                    <span className="text-sm font-medium">Estimated Harvest:</span>
+                    <span className="font-bold">{new Date(results.estimated_harvest_date).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span className="text-sm font-medium">Days to Harvest:</span>
+                    <span className="font-bold">{results.avg_days_to_harvest} days</span>
+                  </div>
+                </div>
+              </Card>
+
+              {results.risk_assessment && (
+                <Card title="Risk Assessment">
+                  <div className={`p-4 rounded-lg mb-3 ${
+                    results.risk_assessment.level === 'high' ? 'bg-red-50 border border-red-200' :
+                    results.risk_assessment.level === 'medium' ? 'bg-yellow-50 border border-yellow-200' :
+                    'bg-green-50 border border-green-200'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                        results.risk_assessment.level === 'high' ? 'bg-red-600 text-white' :
+                        results.risk_assessment.level === 'medium' ? 'bg-yellow-600 text-white' :
+                        'bg-green-600 text-white'
+                      }`}>
+                        {results.risk_assessment.level} Risk
+                      </span>
+                    </div>
+                    <ul className="space-y-1 text-sm mb-3">
+                      {results.risk_assessment.risks.map((risk, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="mt-1">•</span>
+                          <span>{risk}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="pt-3 border-t">
+                      <p className="text-sm font-medium">Recommendation:</p>
+                      <p className="text-sm text-gray-700 mt-1">{results.risk_assessment.recommendation}</p>
+                    </div>
+                  </div>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* Best Planting Months */}
+          {results.best_planting_months && results.best_planting_months.length > 0 && (
+            <Card title="Best Planting Months (Based on Historical Data)">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {results.best_planting_months.map((month, i) => (
+                  <div key={i} className="p-4 bg-gradient-to-br from-green-50 to-blue-50 rounded-lg border border-green-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-lg font-bold text-green-700">{month.month_name}</span>
+                      <span className="px-2 py-1 bg-green-600 text-white text-xs rounded-full">#{i + 1}</span>
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      <div>Avg Yield: <span className="font-bold">{month.avg_yield} kg/ha</span></div>
+                      <div>Based on {month.count} records</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+          </>
         )}
 
         {results && results.seasonal_data && results.seasonal_data.length > 0 && (
