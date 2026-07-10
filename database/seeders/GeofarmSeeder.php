@@ -53,8 +53,8 @@ class GeofarmSeeder extends Seeder
         DB::table('users')->insertOrIgnore([
             [
                 'name'     => 'Administrator',
-                'email'    => 'admin@geofarm.local',
-                'password' => Hash::make('password'),
+                'email'    => 'admin@geofarm.com',
+                'password' => Hash::make('123456'),
             ],
         ]);
     }
