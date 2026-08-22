@@ -12,7 +12,6 @@
         "@headlessui/react": "^2.1.0",
         "@heroicons/react": "^2.1.0",
         "@inertiajs/react": "^2.0.0",
-        "@mapbox/mapbox-gl-draw": "^1.5.1",
         "@tanstack/react-table": "^8.21.3",
         "@turf/area": "^7.4.0",
         "@turf/bbox": "^7.4.0",

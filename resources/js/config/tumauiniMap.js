@@ -61,3 +61,7 @@ export function getBasemapStyle() {
     ],
   };
 }
+
+export function getBasemapProvider() {
+  return import.meta.env.VITE_MAPTILER_KEY ? 'MapTiler Cloud' : 'OpenStreetMap fallback';
+}

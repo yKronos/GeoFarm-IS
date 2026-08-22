@@ -1,19 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import { useForm } from '@inertiajs/react';
 import TumauiniMapFallback from '@/Components/ui/TumauiniMapFallback';
 import * as maplibregl from 'maplibre-gl';
-import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import bbox from '@turf/bbox';
-import { LocateFixed, PenLine, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, LocateFixed, PenLine, RotateCcw, Trash2, X } from 'lucide-react';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import {
   TUMAUINI_BOUNDS,
   TUMAUINI_BOUNDARY_COLLECTION,
   TUMAUINI_CENTER,
+  getBasemapProvider,
   getBasemapStyle,
 } from '@/config/tumauiniMap';
+
+const EMPTY_FEATURE_COLLECTION = { type: 'FeatureCollection', features: [] };
 
 function supportsWebGL() {
   try {
@@ -22,16 +23,6 @@ function supportsWebGL() {
   } catch {
     return false;
   }
-}
-
-function patchDrawClasses() {
-  if (!MapboxDraw?.constants?.classes) return;
-
-  MapboxDraw.constants.classes.CANVAS = 'maplibregl-canvas';
-  MapboxDraw.constants.classes.CONTROL_BASE = 'maplibregl-ctrl';
-  MapboxDraw.constants.classes.CONTROL_PREFIX = 'maplibregl-ctrl-';
-  MapboxDraw.constants.classes.CONTROL_GROUP = 'maplibregl-ctrl-group';
-  MapboxDraw.constants.classes.ATTRIBUTION = 'maplibregl-ctrl-attrib';
 }
 
 function parseGeometry(value) {
@@ -44,13 +35,61 @@ function parseGeometry(value) {
   }
 }
 
+function featureFromGeometry(geometry) {
+  if (!geometry) return EMPTY_FEATURE_COLLECTION;
+  return {
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', properties: {}, geometry }],
+  };
+}
+
+function polygonFromPoints(points) {
+  if (points.length < 3) return null;
+  return {
+    type: 'Polygon',
+    coordinates: [[...points, points[0]]],
+  };
+}
+
+function buildDraftData(points, cursorPoint = null) {
+  const features = points.map((point, index) => ({
+    type: 'Feature',
+    properties: { index: index + 1 },
+    geometry: { type: 'Point', coordinates: point },
+  }));
+
+  const lineCoordinates = cursorPoint && points.length ? [...points, cursorPoint] : points;
+  if (lineCoordinates.length >= 2) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'line' },
+      geometry: { type: 'LineString', coordinates: lineCoordinates },
+    });
+  }
+
+  const polygon = polygonFromPoints(points);
+  if (polygon) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'polygon' },
+      geometry: polygon,
+    });
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
 export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
   const isEdit = Boolean(parcel);
   const mapRef = useRef(null);
   const mapContainerRef = useRef(null);
-  const drawRef = useRef(null);
+  const drawingRef = useRef(false);
+  const draftPointsRef = useRef([]);
+  const finishDrawingRef = useRef(null);
   const [mapReady, setMapReady] = useState(false);
   const [mapUnavailable, setMapUnavailable] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [draftPointCount, setDraftPointCount] = useState(0);
 
   const { data, setData, post, put, processing, errors } = useForm({
     farmer_id: parcel?.farmer_id ?? '',
@@ -68,6 +107,37 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
     geojson: geojson ?? '',
   });
 
+  const setBoundaryData = useCallback((geometry) => {
+    mapRef.current?.getSource('parcel-boundary')?.setData(featureFromGeometry(geometry));
+  }, []);
+
+  const setDraftData = useCallback((points, cursorPoint = null) => {
+    mapRef.current?.getSource('draft-boundary')?.setData(buildDraftData(points, cursorPoint));
+    setDraftPointCount(points.length);
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    drawingRef.current = false;
+    draftPointsRef.current = [];
+    setIsDrawing(false);
+    setDraftData([]);
+    mapRef.current?.doubleClickZoom.enable();
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = '';
+  }, [setDraftData]);
+
+  const finishDrawing = useCallback(() => {
+    const geometry = polygonFromPoints(draftPointsRef.current);
+    if (!geometry) return;
+
+    setData('geojson', JSON.stringify(geometry));
+    setBoundaryData(geometry);
+    clearDraft();
+  }, [clearDraft, setBoundaryData, setData]);
+
+  useEffect(() => {
+    finishDrawingRef.current = finishDrawing;
+  }, [finishDrawing]);
+
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
@@ -76,8 +146,7 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
       return;
     }
 
-    patchDrawClasses();
-
+    const initialGeometry = parseGeometry(geojson);
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: getBasemapStyle(),
@@ -93,9 +162,7 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-    const resizeObserver = new ResizeObserver(() => {
-      map.resize();
-    });
+    const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(mapContainerRef.current);
     requestAnimationFrame(() => map.resize());
 
@@ -106,24 +173,20 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
       }
     });
 
-    const draw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: {
-        polygon: true,
-        trash: true,
-      },
-      defaultMode: 'simple_select',
-    });
-
-    const syncGeometry = () => {
-      const feature = draw.getAll().features.find((item) => item.geometry?.type.includes('Polygon'));
-      setData('geojson', feature ? JSON.stringify(feature.geometry) : '');
-    };
-
     map.on('load', () => {
       map.addSource('tumauini-boundary', {
         type: 'geojson',
         data: TUMAUINI_BOUNDARY_COLLECTION,
+      });
+
+      map.addSource('parcel-boundary', {
+        type: 'geojson',
+        data: featureFromGeometry(initialGeometry),
+      });
+
+      map.addSource('draft-boundary', {
+        type: 'geojson',
+        data: EMPTY_FEATURE_COLLECTION,
       });
 
       map.addLayer({
@@ -147,31 +210,89 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
         },
       });
 
-      map.addControl(draw, 'top-left');
-      drawRef.current = draw;
+      map.addLayer({
+        id: 'parcel-boundary-fill',
+        type: 'fill',
+        source: 'parcel-boundary',
+        paint: {
+          'fill-color': '#10b981',
+          'fill-opacity': 0.34,
+        },
+      });
 
-      const geometry = parseGeometry(geojson);
-      if (geometry) {
-        const feature = {
-          type: 'Feature',
-          properties: {},
-          geometry,
-        };
-        draw.add(feature);
-        map.fitBounds(bbox(feature), { padding: 60, maxZoom: 17, duration: 0 });
+      map.addLayer({
+        id: 'parcel-boundary-line',
+        type: 'line',
+        source: 'parcel-boundary',
+        paint: {
+          'line-color': '#047857',
+          'line-width': 2,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-fill',
+        type: 'fill',
+        source: 'draft-boundary',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: {
+          'fill-color': '#2563eb',
+          'fill-opacity': 0.22,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-line',
+        type: 'line',
+        source: 'draft-boundary',
+        filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']],
+        paint: {
+          'line-color': '#1d4ed8',
+          'line-width': 3,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-points',
+        type: 'circle',
+        source: 'draft-boundary',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#ffffff',
+          'circle-stroke-color': '#1d4ed8',
+          'circle-stroke-width': 2,
+        },
+      });
+
+      if (initialGeometry) {
+        map.fitBounds(bbox({ type: 'Feature', properties: {}, geometry: initialGeometry }), {
+          padding: 60,
+          maxZoom: 17,
+          duration: 0,
+        });
       }
 
       setMapReady(true);
     });
 
-    map.on('draw.create', (event) => {
-      const feature = event.features?.[0];
-      const existing = draw.getAll().features.filter((item) => item.id !== feature?.id);
-      existing.forEach((item) => draw.delete(item.id));
-      syncGeometry();
+    map.on('click', (event) => {
+      if (!drawingRef.current) return;
+      draftPointsRef.current = [...draftPointsRef.current, [event.lngLat.lng, event.lngLat.lat]];
+      setDraftData(draftPointsRef.current);
     });
-    map.on('draw.update', syncGeometry);
-    map.on('draw.delete', syncGeometry);
+
+    map.on('mousemove', (event) => {
+      if (!drawingRef.current) return;
+      map.getCanvas().style.cursor = 'crosshair';
+      setDraftData(draftPointsRef.current, [event.lngLat.lng, event.lngLat.lat]);
+    });
+
+    map.on('dblclick', (event) => {
+      if (!drawingRef.current) return;
+      event.preventDefault();
+      finishDrawingRef.current?.();
+    });
 
     mapRef.current = map;
 
@@ -179,18 +300,22 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
-      drawRef.current = null;
     };
-  }, []);
+  }, [geojson, setDraftData]);
 
   const beginDrawing = () => {
-    if (mapUnavailable) return;
-    drawRef.current?.changeMode('draw_polygon');
+    if (mapUnavailable || !mapReady) return;
+    drawingRef.current = true;
+    draftPointsRef.current = [];
+    setIsDrawing(true);
+    setDraftData([]);
+    mapRef.current?.doubleClickZoom.disable();
   };
 
   const clearGeometry = () => {
     if (mapUnavailable) return;
-    drawRef.current?.deleteAll();
+    clearDraft();
+    setBoundaryData(null);
     setData('geojson', '');
   };
 
@@ -290,26 +415,39 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h3 className="font-semibold text-slate-800">Parcel Boundary</h3>
-              <p className="text-sm text-slate-500">Draw one farm polygon inside the Tumauini focus boundary.</p>
+              <p className="text-sm text-slate-500">
+                Draw one farm polygon inside Tumauini. Basemap: {getBasemapProvider()}.
+              </p>
             </div>
             <div className="grid grid-cols-3 gap-2">
+              {!isDrawing ? (
+                <button
+                  type="button"
+                  onClick={beginDrawing}
+                  disabled={!mapReady}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  <PenLine className="h-4 w-4" />
+                  Draw
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={finishDrawing}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-800"
+                >
+                  <Check className="h-4 w-4" />
+                  Finish
+                </button>
+              )}
               <button
                 type="button"
-                onClick={beginDrawing}
-                disabled={!mapReady}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-              >
-                <PenLine className="h-4 w-4" />
-                Draw
-              </button>
-              <button
-                type="button"
-                onClick={clearGeometry}
+                onClick={isDrawing ? clearDraft : clearGeometry}
                 disabled={!mapReady}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
               >
-                <Trash2 className="h-4 w-4" />
-                Clear
+                {isDrawing ? <X className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+                {isDrawing ? 'Cancel' : 'Clear'}
               </button>
               <button
                 type="button"
@@ -328,6 +466,11 @@ export default function ParcelForm({ parcel, farmers, farmTypes, geojson }) {
               <TumauiniMapFallback className="absolute inset-0" />
             ) : (
               <div ref={mapContainerRef} style={{ position: 'absolute', inset: 0 }} />
+            )}
+            {isDrawing && (
+              <div className="absolute bottom-3 left-3 rounded-md bg-white/95 px-3 py-2 text-sm font-medium text-slate-800 shadow">
+                Draft points: {draftPointCount}. Double-click or press Finish to capture.
+              </div>
             )}
           </div>
 

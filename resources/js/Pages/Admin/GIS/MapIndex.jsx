@@ -5,17 +5,16 @@ import { usePermissions } from '@/hooks/usePermissions';
 import TumauiniMapFallback from '@/Components/ui/TumauiniMapFallback';
 import toast from 'react-hot-toast';
 import * as maplibregl from 'maplibre-gl';
-import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import area from '@turf/area';
 import bbox from '@turf/bbox';
 import center from '@turf/center';
-import { Eye, Layers, LocateFixed, MapPinned, PenLine, RefreshCcw, Trash2 } from 'lucide-react';
+import { Check, Eye, Layers, LocateFixed, MapPinned, PenLine, RefreshCcw, Trash2, X } from 'lucide-react';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import {
   TUMAUINI_BOUNDS,
   TUMAUINI_BOUNDARY_COLLECTION,
   TUMAUINI_CENTER,
+  getBasemapProvider,
   getBasemapStyle,
 } from '@/config/tumauiniMap';
 
@@ -30,19 +29,8 @@ function supportsWebGL() {
   }
 }
 
-function patchDrawClasses() {
-  if (!MapboxDraw?.constants?.classes) return;
-
-  MapboxDraw.constants.classes.CANVAS = 'maplibregl-canvas';
-  MapboxDraw.constants.classes.CONTROL_BASE = 'maplibregl-ctrl';
-  MapboxDraw.constants.classes.CONTROL_PREFIX = 'maplibregl-ctrl-';
-  MapboxDraw.constants.classes.CONTROL_GROUP = 'maplibregl-ctrl-group';
-  MapboxDraw.constants.classes.ATTRIBUTION = 'maplibregl-ctrl-attrib';
-}
-
 function normalizeFeatureCollection(data) {
   if (!data?.type) return EMPTY_FEATURE_COLLECTION;
-
   if (data.type === 'FeatureCollection') return data;
   if (data.type === 'Feature') return { type: 'FeatureCollection', features: [data] };
 
@@ -57,24 +45,66 @@ function formatArea(squareMeters) {
   return `${(squareMeters / 10000).toLocaleString(undefined, { maximumFractionDigits: 2 })} ha`;
 }
 
+function polygonFromPoints(points) {
+  if (points.length < 3) return null;
+  return {
+    type: 'Polygon',
+    coordinates: [[...points, points[0]]],
+  };
+}
+
+function buildDraftData(points, cursorPoint = null) {
+  const features = points.map((point, index) => ({
+    type: 'Feature',
+    properties: { index: index + 1 },
+    geometry: { type: 'Point', coordinates: point },
+  }));
+
+  const lineCoordinates = cursorPoint && points.length ? [...points, cursorPoint] : points;
+  if (lineCoordinates.length >= 2) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'line' },
+      geometry: { type: 'LineString', coordinates: lineCoordinates },
+    });
+  }
+
+  const polygon = polygonFromPoints(points);
+  if (polygon) {
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'polygon' },
+      geometry: polygon,
+    });
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
 export default function MapIndex({ parcels }) {
   const { can } = usePermissions();
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
-  const drawRef = useRef(null);
   const popupRef = useRef(null);
   const parcelsRef = useRef(parcels);
   const selectedParcelRef = useRef('');
+  const drawingRef = useRef(false);
+  const draftPointsRef = useRef([]);
+  const finishDrawingRef = useRef(null);
   const [selectedParcel, setSelectedParcel] = useState('');
   const [geoJsonData, setGeoJsonData] = useState(EMPTY_FEATURE_COLLECTION);
   const [selectedFeature, setSelectedFeature] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
   const [mapUnavailable, setMapUnavailable] = useState(false);
   const [showBoundary, setShowBoundary] = useState(true);
   const [showParcels, setShowParcels] = useState(true);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [draftPointCount, setDraftPointCount] = useState(0);
 
   const canEdit = can('edit parcels');
   const canDelete = can('delete parcels');
+  const basemapProvider = getBasemapProvider();
 
   const mappedCount = geoJsonData.features.length;
   const totalMappedArea = useMemo(
@@ -94,6 +124,21 @@ export default function MapIndex({ parcels }) {
   useEffect(() => {
     selectedParcelRef.current = selectedParcel;
   }, [selectedParcel]);
+
+  const setDraftData = useCallback((points, cursorPoint = null) => {
+    const source = mapRef.current?.getSource('draft-boundary');
+    source?.setData(buildDraftData(points, cursorPoint));
+    setDraftPointCount(points.length);
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    drawingRef.current = false;
+    draftPointsRef.current = [];
+    setIsDrawing(false);
+    setDraftData([]);
+    mapRef.current?.doubleClickZoom.enable();
+    if (mapRef.current) mapRef.current.getCanvas().style.cursor = '';
+  }, [setDraftData]);
 
   const loadParcels = useCallback(() => {
     fetch('/admin/gis/parcels-geojson')
@@ -120,13 +165,35 @@ export default function MapIndex({ parcels }) {
         preserveScroll: true,
         onSuccess: () => {
           toast.success('Farm boundary saved');
+          clearDraft();
           loadParcels();
         },
         onError: () => toast.error('Failed to save boundary'),
         onFinish: () => setLoading(false),
       },
     );
-  }, [loadParcels]);
+  }, [clearDraft, loadParcels]);
+
+  const finishDrawing = useCallback(() => {
+    const activeParcelId = selectedParcelRef.current;
+    const geometry = polygonFromPoints(draftPointsRef.current);
+
+    if (!activeParcelId) {
+      toast.error('Select a parcel before saving a boundary');
+      return;
+    }
+
+    if (!geometry) {
+      toast.error('Add at least 3 points to create a farm boundary');
+      return;
+    }
+
+    saveGeometry(activeParcelId, geometry);
+  }, [saveGeometry]);
+
+  useEffect(() => {
+    finishDrawingRef.current = finishDrawing;
+  }, [finishDrawing]);
 
   useEffect(() => {
     loadParcels();
@@ -139,8 +206,6 @@ export default function MapIndex({ parcels }) {
       setMapUnavailable(true);
       return;
     }
-
-    patchDrawClasses();
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -155,9 +220,7 @@ export default function MapIndex({ parcels }) {
       attributionControl: false,
     });
 
-    const resizeObserver = new ResizeObserver(() => {
-      map.resize();
-    });
+    const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(mapContainerRef.current);
     requestAnimationFrame(() => map.resize());
 
@@ -172,58 +235,20 @@ export default function MapIndex({ parcels }) {
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-    const draw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: canEdit
-        ? {
-            polygon: true,
-            trash: canDelete,
-          }
-        : {},
-      defaultMode: 'simple_select',
-      styles: [
-        {
-          id: 'gl-draw-polygon-fill-inactive',
-          type: 'fill',
-          filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
-          paint: { 'fill-color': '#10b981', 'fill-opacity': 0.34 },
-        },
-        {
-          id: 'gl-draw-polygon-fill-active',
-          type: 'fill',
-          filter: ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
-          paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.28 },
-        },
-        {
-          id: 'gl-draw-polygon-stroke-inactive',
-          type: 'line',
-          filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
-          paint: { 'line-color': '#047857', 'line-width': 2 },
-        },
-        {
-          id: 'gl-draw-polygon-stroke-active',
-          type: 'line',
-          filter: ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
-          paint: { 'line-color': '#1d4ed8', 'line-width': 3 },
-        },
-        {
-          id: 'gl-draw-polygon-and-line-vertex',
-          type: 'circle',
-          filter: ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point']],
-          paint: {
-            'circle-radius': 5,
-            'circle-color': '#ffffff',
-            'circle-stroke-color': '#1d4ed8',
-            'circle-stroke-width': 2,
-          },
-        },
-      ],
-    });
-
     map.on('load', () => {
       map.addSource('tumauini-boundary', {
         type: 'geojson',
         data: TUMAUINI_BOUNDARY_COLLECTION,
+      });
+
+      map.addSource('farm-parcels', {
+        type: 'geojson',
+        data: geoJsonData,
+      });
+
+      map.addSource('draft-boundary', {
+        type: 'geojson',
+        data: EMPTY_FEATURE_COLLECTION,
       });
 
       map.addLayer({
@@ -247,73 +272,72 @@ export default function MapIndex({ parcels }) {
         },
       });
 
-      map.addControl(draw, 'top-left');
-      drawRef.current = draw;
-      draw.add(geoJsonData);
-    });
-
-    map.on('draw.create', (event) => {
-      const feature = event.features?.[0];
-      if (!feature) return;
-
-      const activeParcelId = selectedParcelRef.current;
-      if (!activeParcelId) {
-        draw.delete(feature.id);
-        toast.error('Select a parcel before drawing');
-        return;
-      }
-
-      const parcel = parcelsRef.current.find((item) => String(item.id) === String(activeParcelId));
-      feature.properties = {
-        id: activeParcelId,
-        parcel_number: parcel?.parcel_number || `Parcel #${activeParcelId}`,
-        farmer_name: parcel?.farmer ? `${parcel.farmer.first_name} ${parcel.farmer.last_name}` : 'Unknown',
-        barangay: parcel?.barangay || 'Unspecified',
-        area_ha: parcel?.total_area_ha || null,
-      };
-
-      saveGeometry(activeParcelId, feature.geometry);
-    });
-
-    map.on('draw.update', (event) => {
-      event.features?.forEach((feature) => {
-        const parcelId = feature.properties?.id;
-        if (parcelId) saveGeometry(parcelId, feature.geometry);
+      map.addLayer({
+        id: 'farm-parcels-fill',
+        type: 'fill',
+        source: 'farm-parcels',
+        paint: {
+          'fill-color': '#10b981',
+          'fill-opacity': 0.36,
+        },
       });
-    });
 
-    map.on('draw.delete', (event) => {
-      event.features?.forEach((feature) => {
-        const parcelId = feature.properties?.id;
-        if (!parcelId) return;
-
-        router.delete(`/admin/gis/parcels/${parcelId}/geometry`, {
-          preserveState: true,
-          preserveScroll: true,
-          onSuccess: () => {
-            toast.success('Boundary deleted');
-            loadParcels();
-          },
-          onError: () => toast.error('Failed to delete boundary'),
-        });
+      map.addLayer({
+        id: 'farm-parcels-line',
+        type: 'line',
+        source: 'farm-parcels',
+        paint: {
+          'line-color': '#064e3b',
+          'line-width': 2,
+        },
       });
+
+      map.addLayer({
+        id: 'draft-boundary-fill',
+        type: 'fill',
+        source: 'draft-boundary',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: {
+          'fill-color': '#2563eb',
+          'fill-opacity': 0.22,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-line',
+        type: 'line',
+        source: 'draft-boundary',
+        filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']],
+        paint: {
+          'line-color': '#1d4ed8',
+          'line-width': 3,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-points',
+        type: 'circle',
+        source: 'draft-boundary',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#ffffff',
+          'circle-stroke-color': '#1d4ed8',
+          'circle-stroke-width': 2,
+        },
+      });
+
+      setMapReady(true);
     });
 
     map.on('click', (event) => {
-      const drawLayers = [
-          'gl-draw-polygon-fill-inactive.cold',
-          'gl-draw-polygon-fill-active.cold',
-          'gl-draw-polygon-fill-inactive.hot',
-          'gl-draw-polygon-fill-active.hot',
-        ].filter((layerId) => map.getLayer(layerId));
+      if (drawingRef.current) {
+        draftPointsRef.current = [...draftPointsRef.current, [event.lngLat.lng, event.lngLat.lat]];
+        setDraftData(draftPointsRef.current);
+        return;
+      }
 
-      if (!drawLayers.length) return;
-
-      const rendered = map.queryRenderedFeatures(event.point, {
-        layers: drawLayers,
-      });
-
-      const feature = rendered.find((item) => item.properties?.parcel_number || item.properties?.id);
+      const feature = map.queryRenderedFeatures(event.point, { layers: ['farm-parcels-fill'] })?.[0];
       if (!feature) return;
 
       const props = feature.properties || {};
@@ -332,6 +356,18 @@ export default function MapIndex({ parcels }) {
         .addTo(map);
     });
 
+    map.on('mousemove', (event) => {
+      if (!drawingRef.current) return;
+      map.getCanvas().style.cursor = 'crosshair';
+      setDraftData(draftPointsRef.current, [event.lngLat.lng, event.lngLat.lat]);
+    });
+
+    map.on('dblclick', (event) => {
+      if (!drawingRef.current) return;
+      event.preventDefault();
+      finishDrawingRef.current?.();
+    });
+
     mapRef.current = map;
 
     return () => {
@@ -339,17 +375,13 @@ export default function MapIndex({ parcels }) {
       popupRef.current?.remove();
       map.remove();
       mapRef.current = null;
-      drawRef.current = null;
     };
-  }, []);
+  }, [setDraftData]);
 
   useEffect(() => {
-    const draw = drawRef.current;
-    if (!draw) return;
-
-    draw.deleteAll();
-    if (showParcels) draw.add(geoJsonData);
-  }, [geoJsonData, showParcels]);
+    const source = mapRef.current?.getSource('farm-parcels');
+    source?.setData(geoJsonData);
+  }, [geoJsonData]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -359,6 +391,15 @@ export default function MapIndex({ parcels }) {
     map.setLayoutProperty('tumauini-boundary-fill', 'visibility', visibility);
     map.setLayoutProperty('tumauini-boundary-line', 'visibility', visibility);
   }, [showBoundary]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map?.getLayer('farm-parcels-fill')) return;
+
+    const visibility = showParcels ? 'visible' : 'none';
+    map.setLayoutProperty('farm-parcels-fill', 'visibility', visibility);
+    map.setLayoutProperty('farm-parcels-line', 'visibility', visibility);
+  }, [showParcels]);
 
   const focusTumauini = () => {
     mapRef.current?.fitBounds(TUMAUINI_BOUNDS, {
@@ -387,13 +428,28 @@ export default function MapIndex({ parcels }) {
       return;
     }
 
-    if (!canEdit) return;
+    if (!canEdit) {
+      toast.error('Your account needs the edit parcels permission to draw boundaries');
+      return;
+    }
+
+    if (!mapReady) {
+      toast.error('Map is still loading');
+      return;
+    }
+
     if (!selectedParcel) {
       toast.error('Select a parcel first');
       return;
     }
 
-    drawRef.current?.changeMode('draw_polygon');
+    popupRef.current?.remove();
+    drawingRef.current = true;
+    draftPointsRef.current = [];
+    setIsDrawing(true);
+    setDraftData([]);
+    mapRef.current?.doubleClickZoom.disable();
+    toast.success('Drawing started. Click boundary points, then double-click or press Finish.');
   };
 
   const deleteSelectedBoundary = () => {
@@ -411,6 +467,7 @@ export default function MapIndex({ parcels }) {
       onSuccess: () => {
         toast.success('Boundary deleted');
         setSelectedFeature(null);
+        clearDraft();
         loadParcels();
       },
       onError: () => toast.error('Failed to delete boundary'),
@@ -428,9 +485,9 @@ export default function MapIndex({ parcels }) {
   return (
     <AdminLayout title="GIS Farm Mapping">
       <div className="space-y-5">
-        <section className="bg-white border border-slate-200 rounded-lg p-4">
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="min-h-[680px] overflow-hidden rounded-lg border border-slate-200 relative">
+            <div className="relative min-h-[680px] overflow-hidden rounded-lg border border-slate-200">
               {mapUnavailable ? (
                 <TumauiniMapFallback className="absolute inset-0" />
               ) : (
@@ -439,6 +496,11 @@ export default function MapIndex({ parcels }) {
               {loading && (
                 <div className="absolute left-4 top-4 rounded-md bg-white/95 px-3 py-2 text-sm font-medium text-emerald-800 shadow">
                   Saving boundary...
+                </div>
+              )}
+              {isDrawing && (
+                <div className="absolute bottom-4 left-4 rounded-md bg-white/95 px-3 py-2 text-sm font-medium text-slate-800 shadow">
+                  Draft points: {draftPointCount}. Double-click the map or press Finish to save.
                 </div>
               )}
             </div>
@@ -452,8 +514,11 @@ export default function MapIndex({ parcels }) {
                 <h2 className="mt-2 text-2xl font-semibold text-slate-900">Municipal farm intelligence map</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   Navigation is constrained to Tumauini, Isabela using the local focus extent 17.2340-17.3140 N and
-                  121.7699-121.8499 E. Basemap uses MapTiler when configured, with local development fallback tiles.
+                  121.7699-121.8499 E.
                 </p>
+                <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  Basemap: <span className="font-medium">{basemapProvider}</span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -474,6 +539,7 @@ export default function MapIndex({ parcels }) {
                   onChange={(event) => {
                     setSelectedParcel(event.target.value);
                     setSelectedFeature(null);
+                    clearDraft();
                   }}
                   className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-200"
                 >
@@ -494,16 +560,27 @@ export default function MapIndex({ parcels }) {
                 )}
 
                 <div className="mt-4 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={beginDrawing}
-                    disabled={!canEdit}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    title="Draw boundary"
-                  >
-                    <PenLine className="h-4 w-4" />
-                    Draw
-                  </button>
+                  {!isDrawing ? (
+                    <button
+                      type="button"
+                      onClick={beginDrawing}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+                      title="Draw boundary"
+                    >
+                      <PenLine className="h-4 w-4" />
+                      Draw
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={finishDrawing}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-800"
+                      title="Finish boundary"
+                    >
+                      <Check className="h-4 w-4" />
+                      Finish
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={focusSelectedParcel}
@@ -525,12 +602,12 @@ export default function MapIndex({ parcels }) {
                   </button>
                   <button
                     type="button"
-                    onClick={loadParcels}
+                    onClick={isDrawing ? clearDraft : loadParcels}
                     className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    title="Refresh layers"
+                    title={isDrawing ? 'Cancel drawing' : 'Refresh layers'}
                   >
-                    <RefreshCcw className="h-4 w-4" />
-                    Refresh
+                    {isDrawing ? <X className="h-4 w-4" /> : <RefreshCcw className="h-4 w-4" />}
+                    {isDrawing ? 'Cancel' : 'Refresh'}
                   </button>
                 </div>
               </div>
