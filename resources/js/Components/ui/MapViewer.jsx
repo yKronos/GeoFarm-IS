@@ -91,8 +91,8 @@ export default function MapViewer({ geojson, center = TUMAUINI_CENTER, zoom = 12
         type: 'line',
         source: 'tumauini-boundary',
         paint: {
-          'line-color': '#14532d',
-          'line-width': 2,
+          'line-color': '#facc15',
+          'line-width': 3,
           'line-dasharray': [2, 2],
         },
       });
@@ -121,12 +121,24 @@ export default function MapViewer({ geojson, center = TUMAUINI_CENTER, zoom = 12
       });
 
       map.addLayer({
+        id: 'farm-parcels-line-halo',
+        type: 'line',
+        source: 'farm-parcels',
+        paint: {
+          'line-color': '#020617',
+          'line-width': 7,
+          'line-opacity': 0.92,
+        },
+      });
+
+      map.addLayer({
         id: 'farm-parcels-line',
         type: 'line',
         source: 'farm-parcels',
         paint: {
-          'line-color': '#064e3b',
-          'line-width': 2,
+          'line-color': '#fef08a',
+          'line-width': 4,
+          'line-opacity': 1,
         },
       });
 

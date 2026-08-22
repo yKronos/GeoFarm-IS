@@ -27,7 +27,7 @@ export default function TumauiniMapFallback({ className = '', showNotice = true 
       key: `${dx}:${dy}`,
       x: dx * TILE_SIZE - offsetX,
       y: dy * TILE_SIZE - offsetY,
-      url: `https://tile.openstreetmap.org/${FALLBACK_ZOOM}/${baseX + dx}/${baseY + dy}.png`,
+      url: `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${FALLBACK_ZOOM}/${baseY + dy}/${baseX + dx}`,
     })));
   }, []);
 
@@ -52,7 +52,7 @@ export default function TumauiniMapFallback({ className = '', showNotice = true 
       <div className="pointer-events-none absolute inset-[18%] rounded-sm border-2 border-dashed border-emerald-800/80 bg-emerald-500/10" />
 
       <div className="absolute bottom-3 left-3 rounded-md bg-white/95 px-3 py-1 text-xs font-medium text-slate-700 shadow">
-        Tumauini, Isabela
+        Tumauini, Isabela · Satellite fallback
       </div>
 
       {showNotice && (

@@ -35,33 +35,31 @@ export function getBasemapStyle() {
   const key = import.meta.env.VITE_MAPTILER_KEY;
 
   if (key) {
-    return `https://api.maptiler.com/maps/dataviz/style.json?key=${key}`;
+    return `https://api.maptiler.com/maps/satellite/style.json?key=${key}`;
   }
 
   return {
     version: 8,
     sources: {
-      osm: {
+      satellite: {
         type: 'raster',
         tiles: [
-          'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        attribution: '© OpenStreetMap contributors',
+        attribution: 'Tiles © Esri',
       },
     },
     layers: [
       {
-        id: 'osm',
+        id: 'satellite',
         type: 'raster',
-        source: 'osm',
+        source: 'satellite',
       },
     ],
   };
 }
 
 export function getBasemapProvider() {
-  return import.meta.env.VITE_MAPTILER_KEY ? 'MapTiler Cloud' : 'OpenStreetMap fallback';
+  return import.meta.env.VITE_MAPTILER_KEY ? 'MapTiler Satellite' : 'Esri World Imagery fallback';
 }

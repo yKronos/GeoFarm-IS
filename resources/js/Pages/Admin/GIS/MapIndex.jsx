@@ -76,6 +76,11 @@ function buildDraftData(points, cursorPoint = null) {
       properties: { kind: 'polygon' },
       geometry: polygon,
     });
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'outline' },
+      geometry: { type: 'LineString', coordinates: polygon.coordinates[0] },
+    });
   }
 
   return { type: 'FeatureCollection', features };
@@ -266,9 +271,9 @@ export default function MapIndex({ parcels }) {
         type: 'line',
         source: 'tumauini-boundary',
         paint: {
-          'line-color': '#14532d',
-          'line-width': 2,
-          'line-dasharray': [2, 1.5],
+          'line-color': '#facc15',
+          'line-width': 3,
+          'line-dasharray': [2, 1.2],
         },
       });
 
@@ -283,12 +288,24 @@ export default function MapIndex({ parcels }) {
       });
 
       map.addLayer({
+        id: 'farm-parcels-line-halo',
+        type: 'line',
+        source: 'farm-parcels',
+        paint: {
+          'line-color': '#020617',
+          'line-width': 7,
+          'line-opacity': 0.92,
+        },
+      });
+
+      map.addLayer({
         id: 'farm-parcels-line',
         type: 'line',
         source: 'farm-parcels',
         paint: {
-          'line-color': '#064e3b',
-          'line-width': 2,
+          'line-color': '#fef08a',
+          'line-width': 4,
+          'line-opacity': 1,
         },
       });
 
@@ -298,8 +315,20 @@ export default function MapIndex({ parcels }) {
         source: 'draft-boundary',
         filter: ['==', ['geometry-type'], 'Polygon'],
         paint: {
-          'fill-color': '#2563eb',
-          'fill-opacity': 0.22,
+          'fill-color': '#38bdf8',
+          'fill-opacity': 0.32,
+        },
+      });
+
+      map.addLayer({
+        id: 'draft-boundary-line-halo',
+        type: 'line',
+        source: 'draft-boundary',
+        filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']],
+        paint: {
+          'line-color': '#020617',
+          'line-width': 8,
+          'line-opacity': 0.95,
         },
       });
 
@@ -309,8 +338,9 @@ export default function MapIndex({ parcels }) {
         source: 'draft-boundary',
         filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']],
         paint: {
-          'line-color': '#1d4ed8',
-          'line-width': 3,
+          'line-color': '#22d3ee',
+          'line-width': 5,
+          'line-opacity': 1,
         },
       });
 
@@ -320,10 +350,10 @@ export default function MapIndex({ parcels }) {
         source: 'draft-boundary',
         filter: ['==', ['geometry-type'], 'Point'],
         paint: {
-          'circle-radius': 5,
-          'circle-color': '#ffffff',
-          'circle-stroke-color': '#1d4ed8',
-          'circle-stroke-width': 2,
+          'circle-radius': 6,
+          'circle-color': '#fef08a',
+          'circle-stroke-color': '#020617',
+          'circle-stroke-width': 3,
         },
       });
 
@@ -398,6 +428,7 @@ export default function MapIndex({ parcels }) {
 
     const visibility = showParcels ? 'visible' : 'none';
     map.setLayoutProperty('farm-parcels-fill', 'visibility', visibility);
+    map.setLayoutProperty('farm-parcels-line-halo', 'visibility', visibility);
     map.setLayoutProperty('farm-parcels-line', 'visibility', visibility);
   }, [showParcels]);
 

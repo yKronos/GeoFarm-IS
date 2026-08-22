@@ -37,8 +37,8 @@ export default function ParcelsIndex({ parcels }) {
                                 <td className="px-4 py-3">{p.total_area_ha}</td>
                                 <td className="px-4 py-3">{p.farm_type?.type_name}</td>
                                 <td className="px-4 py-3">
-                                    <span className={`text-xs px-2 py-0.5 rounded-full ${p.geom ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                                        {p.geom ? 'Yes' : 'No'}
+                                    <span className={`text-xs px-2 py-0.5 rounded-full ${p.has_map ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                                        {p.has_map ? 'Yes' : 'No'}
                                     </span>
                                 </td>
                                 <td className="px-4 py-3 flex gap-2">

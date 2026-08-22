@@ -15,7 +15,17 @@ class ParcelController extends Controller
     public function index()
     {
         return Inertia::render('Admin/Parcels/Index', [
-            'parcels' => FarmParcel::with(['farmer', 'farmType'])->paginate(20),
+            'parcels' => FarmParcel::with(['farmer', 'farmType'])
+                ->select([
+                    'id',
+                    'farmer_id',
+                    'parcel_number',
+                    'barangay',
+                    'total_area_ha',
+                    'farm_type_id',
+                    DB::raw('geom IS NOT NULL as has_map'),
+                ])
+                ->paginate(20),
         ]);
     }
 

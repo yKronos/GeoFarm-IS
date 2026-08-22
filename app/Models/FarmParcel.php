@@ -12,6 +12,8 @@ class FarmParcel extends Model
         'land_owner_name','within_ancestral','arb',
     ];
 
+    protected $hidden = ['geom'];
+
     protected $casts = ['within_ancestral' => 'boolean', 'arb' => 'boolean'];
 
     public function farmer()   { return $this->belongsTo(Farmer::class); }
